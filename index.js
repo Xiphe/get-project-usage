@@ -100,6 +100,11 @@ function notNull(thing) {
   return thing !== null;
 }
 
+function notInSubPackage(file) {
+  return file.path.indexOf('bower_components') === -1 &&
+    file.path.indexOf('node_modules') === -1;
+}
+
 function logRateLimitHint() {
   setTimeout(() => {
     const timeLeft = pendingSearches.length / maxParalelSearch * searchLimitTimeout;
@@ -144,7 +149,7 @@ function startScheduler() {
   }, countDownInterval);
 }
 
-function scheduleSearch() {
+function scheduleSearch(force) {
   if (currentSearches < maxParalelSearch) {
     currentSearches += 1;
     return Promise.resolve();
@@ -155,26 +160,36 @@ function scheduleSearch() {
   }
 
   return new Promise((resolve) => {
-    pendingSearches.push(resolve);
+    pendingSearches[force ? 'unshift' : 'push'](resolve);
   });
 }
 
-function find(repo, file) {
-  return scheduleSearch().then(() => {
+function find(repo, file, aPage, somePrevCound) {
+  const page = aPage || 1;
+  const prefCount = somePrevCound || 0;
+
+  return scheduleSearch(page > 1).then(() => {
     debug(`searching "${repo.full_name}" for ${file} files`);
 
     return new Promise((resolve, reject) => {
       ghsearch.code({
-        // q: `filename:${file}+repo:Jimdo/siteadmin`,
+        // q: `filename:${file}+repo:Jimdo/jimdo`,
         q: `filename:${file}+repo:${repo.full_name}`,
-        sort: 'created',
-        order: 'asc',
+        per_page: 100,
+        page,
       }, (err, result) => {
         if (err) {
           return reject(err);
         }
 
-        return resolve(result.items);
+        if (prefCount + result.items.length < result.total_count) {
+          return find(repo, file, page + 1, prefCount + result.items.length)
+            .then((moreItems) => {
+              resolve(result.items.filter(notInSubPackage).concat(moreItems));
+            });
+        }
+
+        return resolve(result.items.filter(notInSubPackage));
       });
     });
   });
@@ -238,7 +253,7 @@ function findPkgs(repo) {
   return Promise.all(
     packageFiles.map((file) => find(repo, file))
   ).then(concat).then((files) => {
-    // const ghrepo = client.repo('Jimdo/siteadmin');
+    // const ghrepo = client.repo('Jimdo/jimdo');
     const ghrepo = client.repo(repo.full_name);
 
     if (!files.length) {
@@ -271,7 +286,7 @@ let totalRepos = 0;
 function getUsage(aPage) {
   const page = aPage || 1;
 
-  if (maxPages > -1 && page >= maxPages) {
+  if (maxPages > -1 && page >= maxPages + 1) {
     debug(`aborting repo fetching after ${maxPages} pages`);
     return Promise.resolve([]);
   }
@@ -312,7 +327,7 @@ getUsage().then((usages) => {
   console.log(`\nsearched ${chalk.yellow(totalRepos)} repos ` +
     `for usage of ${chalk.cyan(argv.search)}\n`);
 
-  if (!usages) {
+  if (!usages || !usages.length) {
     console.log('...no usage found');
   } else {
     usages.forEach((usage) => {
