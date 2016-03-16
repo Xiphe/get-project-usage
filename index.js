@@ -6,8 +6,6 @@ const github = require('octonode');
 const argv = require('minimist')(process.argv.slice(2));
 const chalk = require('chalk');
 const path = require('path');
-const perPage = 100;
-const maxPages = -1;
 const packageFiles = [
   'package.json',
   'bower.json',
@@ -41,8 +39,7 @@ function help() {
     `  ${chalk.yellow('--token')}     ${req} OAuth token with repo access`,
     `  ${chalk.yellow('--search')}    ${req} the package name you want to search`,
     '              as used in package.json or bower.json',
-    `  ${chalk.yellow('--org')}       name of the org you want to search in`,
-    '              your owned repos are searched if not set',
+    `  ${chalk.yellow('--user')}      ${req} name of the org or user you want to search in`,
     `  ${chalk.yellow('--verbose')}   log a lot`,
     `  ${chalk.yellow('--help')}      show this help`,
     '',
@@ -84,8 +81,11 @@ if (!argv.search) {
   exit(new Error('missing search'));
 }
 
+if (!argv.user) {
+  exit(new Error('missing user'));
+}
+
 const client = github.client(argv.token);
-const ghorg = argv.org ? client.org(argv.org) : null;
 const ghsearch = client.search();
 
 function concat(args) {
@@ -164,17 +164,17 @@ function scheduleSearch(force) {
   });
 }
 
-function find(repo, file, aPage, somePrevCound) {
+function find(file, aPage, somePrevCound) {
   const page = aPage || 1;
   const prefCount = somePrevCound || 0;
 
   return scheduleSearch(page > 1).then(() => {
-    debug(`searching "${repo.full_name}" for ${file} files`);
+    debug(`searching for ${file} files`);
 
     return new Promise((resolve, reject) => {
       ghsearch.code({
         // q: `filename:${file}+repo:Jimdo/jimdo`,
-        q: `filename:${file}+repo:${repo.full_name}`,
+        q: `${argv.search} filename:${file}+user:${argv.user}`,
         per_page: 100,
         page,
       }, (err, result) => {
@@ -183,7 +183,7 @@ function find(repo, file, aPage, somePrevCound) {
         }
 
         if (prefCount + result.items.length < result.total_count) {
-          return find(repo, file, page + 1, prefCount + result.items.length)
+          return find(file, page + 1, prefCount + result.items.length)
             .then((moreItems) => {
               resolve(result.items.filter(notInSubPackage).concat(moreItems));
             });
@@ -195,136 +195,70 @@ function find(repo, file, aPage, somePrevCound) {
   });
 }
 
-function getProjectUsage(ghrepo) {
-  return function mapper(file) {
-    const ghPath = path.join(ghrepo.name, file.path);
-
-    return new Promise((resolve, reject) => {
-      debug(`searching for usage in ${ghPath}`);
-
-      ghrepo.contents(file.path, (err, contents) => {
-        if (err) {
-          return reject(err);
-        }
-
-        const packageJson = JSON.parse(
-          new Buffer(contents.content, contents.encoding).toString()
-        );
-
-        return resolve(
-          dependencyKeys.map((dependencyKey) => {
-            if (packageJson[dependencyKey] && packageJson[dependencyKey][argv.search]) {
-              return {
-                type: dependencyKey,
-                version: packageJson[dependencyKey][argv.search],
-              };
-            }
-
-            return null;
-          })
-          .filter(notNull)
-          .reduce((result, usage) => {
-            if (result === null) {
-              return {
-                ghPath,
-                usages: [usage],
-              };
-            }
-
-            result.usages.push(usage);
-
-            return result;
-          }, null)
-        );
-      });
-    }).then((result) => {
-      if (!result) {
-        debug(`not used in ${ghPath}`);
-      } else {
-        debug(chalk.green(`usage found in ${ghPath}`));
-      }
-
-      return result;
-    });
-  };
-}
-
-function findPkgs(repo) {
-  return Promise.all(
-    packageFiles.map((file) => find(repo, file))
-  ).then(concat).then((files) => {
-    // const ghrepo = client.repo('Jimdo/jimdo');
-    const ghrepo = client.repo(repo.full_name);
-
-    if (!files.length) {
-      debug(`no package files found for ${repo.full_name}`);
-    }
-
-    return Promise.all(files.filter(isPkg).map(getProjectUsage(ghrepo)));
-  });
-}
-
-function getRepos(page, cb) {
-  if (ghorg) {
-    return ghorg.repos(page, perPage, cb);
-  }
-
-  return client.get(
-    '/user/repos',
-    {
-      type: 'owner',
-      page,
-      per_page: perPage,
-    },
-    (err, res, repos) => {
-      cb(err, repos);
-    }
-  );
-}
-
-let totalRepos = 0;
-function getUsage(aPage) {
-  const page = aPage || 1;
-
-  if (maxPages > -1 && page >= maxPages + 1) {
-    debug(`aborting repo fetching after ${maxPages} pages`);
-    return Promise.resolve([]);
-  }
+function getProjectUsage(file) {
+  const ghrepo = client.repo(file.repository.full_name);
+  const ghPath = path.join(file.repository.full_name, file.path);
 
   return new Promise((resolve, reject) => {
-    debug(`fetching repos page: ${page}`);
-    getRepos(page, (err, repos) => {
+    debug(`searching for usage in ${ghPath}`);
+
+    ghrepo.contents(file.path, (err, contents) => {
       if (err) {
         return reject(err);
       }
 
-      totalRepos += repos.length;
-      debug(
-        `got ${repos.length} new repos ` +
-        `(total: ${totalRepos})`
+      const packageJson = JSON.parse(
+        new Buffer(contents.content, contents.encoding).toString()
       );
 
-      const promises = [
-        Promise
-          .all(repos.map(findPkgs))
-          .then((usages) => concat(usages).filter(notNull)),
-      ];
+      return resolve(
+        dependencyKeys.map((dependencyKey) => {
+          if (packageJson[dependencyKey] && packageJson[dependencyKey][argv.search]) {
+            return {
+              type: dependencyKey,
+              version: packageJson[dependencyKey][argv.search],
+            };
+          }
 
-      if (repos.length === perPage) {
-        promises.push(getUsage(page + 1));
-      }
+          return null;
+        })
+        .filter(notNull)
+        .reduce((result, usage) => {
+          if (result === null) {
+            return {
+              ghPath,
+              usages: [usage],
+            };
+          }
 
-      return Promise.all(promises)
-        .then(
-          (allUsages) => resolve(concat(allUsages)),
-          reject
-        );
+          result.usages.push(usage);
+
+          return result;
+        }, null)
+      );
     });
+  }).then((result) => {
+    if (!result) {
+      debug(`not used in ${ghPath}`);
+    } else {
+      debug(chalk.green(`usage found in ${ghPath}`));
+    }
+
+    return result;
   });
 }
 
-getUsage().then((usages) => {
-  console.log(`\nsearched ${chalk.yellow(totalRepos)} repos ` +
+function findPkgs() {
+  return Promise.all(
+    packageFiles.map((file) => find(file))
+  )
+    .then(concat)
+    .then((files) => Promise.all(files.map(getProjectUsage)))
+    .then((usages) => usages.filter(notNull));
+}
+
+findPkgs().then((usages) => {
+  console.log(`\nsearched all repos of ${chalk.yellow(argv.user)} ` +
     `for usage of ${chalk.cyan(argv.search)}\n`);
 
   if (!usages || !usages.length) {
@@ -339,6 +273,4 @@ getUsage().then((usages) => {
   }
 
   exit();
-}, (err) => {
-  exit(err);
-});
+}).catch(exit);
