@@ -1,15 +1,22 @@
 {
-  "name": "get-used-package-versions",
+  "name": "get-project-usage",
   "version": "0.0.0",
   "description": "Get used versions of a package across all projects of a github user",
-  "main": "index.js",
+  "bin": {
+    "get-project-usage": "./index.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Hannes Diercks <get-used-package-versions@xiphe.net>",
   "license": "MIT",
   "devDependencies": {
-    "eslint": "^2.4.0",
-    "eslint-config-airbnb": "^6.1.0"
+    "eslint": "2.4.0",
+    "eslint-config-airbnb": "6.1.0"
+  },
+  "dependencies": {
+    "chalk": "1.1.1",
+    "minimist": "1.2.0",
+    "octonode": "0.7.4"
   }
 }
