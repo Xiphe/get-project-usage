@@ -1,6 +1,6 @@
 {
   "name": "get-project-usage",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Get used versions of a package across all projects of a github user",
   "bin": {
     "get-project-usage": "./index.js"
